@@ -1,6 +1,6 @@
 module pion-sfu
 
-go 1.26.0
+go 1.24.0
 
 require (
 	github.com/pion/ice/v4 v4.2.1
