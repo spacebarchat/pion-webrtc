@@ -1,10 +1,8 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -15,6 +13,7 @@ import (
 	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
 	"github.com/pion/logging"
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -95,26 +94,9 @@ func handleJoin(clientID string) error {
 	if _, err := pc.AddTrack(masterAudio); err != nil {
 		return fmt.Errorf("AddTrack audio: %w", err)
 	}
-	sender, err := pc.AddTrack(masterVideo); 
-	if err != nil {
+	if _, err := pc.AddTrack(masterVideo); err != nil {
 		return fmt.Errorf("AddTrack video: %w", err)
 	}
-
-	// read rtcp packets from the remote track
-		go func() {
-			for {
-				_, _, err := sender.ReadRTCP()
-				if err != nil {
-					if errors.Is(err, io.EOF) {
-						fmt.Printf("***** EOF reading RTCP from publish peer connection\n")
-
-						break
-					}
-					log.Printf("RTCP read error for %s/%s: %v", clientID, "video", err)
-					return
-				}
-			}
-		}()
 
 	p := &Peer{
 		id:            clientID,
@@ -307,6 +289,16 @@ func handleSubscribe(p *Peer, msg SignalMessage, requestID string) error {
 
 	log.Printf("%s Subscribed to track ssrc %d", p.id, pt.ssrc)
 
+	// force a keyframe
+	if err := publisher.pc.WriteRTCP([]rtcp.Packet{
+		&rtcp.PictureLossIndication{
+			SenderSSRC: uint32(pt.ssrc), 
+			MediaSSRC:  uint32(pt.ssrc),
+		},
+	}); err != nil {
+		log.Printf("WriteRTCP: %v", err)
+	}
+
 	return ipcConn.sendReply(requestID, SignalMessage{
 		Type:        "subscribed",
 		ClientID:    p.id,
@@ -382,22 +374,6 @@ func setupOnTrack(p *Peer) {
 		}
 
 		log.Printf("Client %s started publishing %s (SSRC: %d)", p.id, trackType, ssrc)
-
-		// read rtcp packets from the remote track
-		go func() {
-			for {
-				_, _, err := receiver.ReadRTCP()
-				if err != nil {
-					if errors.Is(err, io.EOF) {
-						fmt.Printf("***** EOF reading RTCP from publish peer connection\n")
-
-						break
-					}
-					log.Printf("RTCP read error for %s/%s: %v", p.id, trackType, err)
-					return
-				}
-			}
-		}()
 
 		// Forward RTP packets to all subscribed peers
 		go func() {
@@ -546,12 +522,16 @@ func main() {
 	// interceptorRegistry.Add(intervalPliFactory)
 
 	// Use the default set of Interceptors
-	if err = webrtc.RegisterDefaultInterceptors(mediaEngine, interceptorRegistry); err != nil {
+	//if err = webrtc.RegisterDefaultInterceptors(mediaEngine, interceptorRegistry); err != nil {
+	//	panic(err)
+	//}
+
+	// We want TWCC in case the subscriber supports it
+	if err = webrtc.ConfigureTWCCSender(mediaEngine, interceptorRegistry); err != nil {
 		panic(err)
 	}
 
-	// We want TWCC in case the subscriber supports it
-	if err = webrtc.ConfigureTWCCHeaderExtensionSender(mediaEngine, interceptorRegistry); err != nil {
+	if err = webrtc.ConfigureRTCPReports(interceptorRegistry); err != nil {
 		panic(err)
 	}
 
