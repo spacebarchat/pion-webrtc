@@ -14,8 +14,9 @@ type Peer struct {
 	mu             sync.Mutex
 	audioPublished *PublishedTrack
 	videoPublished *PublishedTrack
-	// rtx is currently non-functional
-	videoRTXPublished *PublishedTrack
+
+	isAudioPublished bool
+	isVideoPublished bool
 
 	// single downstream track that all subscribed audio/video is multiplexed onto
 	masterAudio *MultiplexTrack
@@ -38,14 +39,6 @@ func (p *Peer) setPublishedTrack(trackType string, pt *PublishedTrack) {
 	} else {
 		p.videoPublished = pt
 	}
-}
-
-func (p *Peer) getPublishedRTXPublished() *PublishedTrack {
-	return p.videoRTXPublished
-}
-
-func (p *Peer) setPublishedRTXPublished(pt *PublishedTrack) {
-	p.videoRTXPublished = pt
 }
 
 //wraps a local static RTP track fed by an incoming remote

@@ -57,7 +57,7 @@ func createMediaEngine() (*webrtc.MediaEngine, error) {
 		return nil, err
 	}
 
-	/*
+	
 	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
 			MimeType:    webrtc.MimeTypeRTX,
@@ -69,7 +69,7 @@ func createMediaEngine() (*webrtc.MediaEngine, error) {
 	}, webrtc.RTPCodecTypeVideo); err != nil {
 		return nil, err
 	}
-	*/
+	
 
 	return m, nil
 }
@@ -182,6 +182,11 @@ func handlePublish(p *Peer, msg SignalMessage) error {
 	}
 
 	p.mu.Lock()
+	if trackType == "audio" {
+		p.isAudioPublished = true
+	} else {
+		p.isVideoPublished = true
+	}
 	existing := p.getPublishedTrack(trackType)
 	p.mu.Unlock()
 	if existing != nil {
@@ -212,36 +217,37 @@ func handleStopPublish(p *Peer, msg SignalMessage) error {
 		return fmt.Errorf("invalid trackType: %s", trackType)
 	}
 
+	if trackType == "audio" {
+		p.isAudioPublished = false
+	} else {
+		p.isVideoPublished = false
+	}
+
 	p.mu.Lock()
 	pt := p.getPublishedTrack(trackType)
 	if pt == nil {
 		p.mu.Unlock()
 		return fmt.Errorf("not publishing %s", trackType)
 	}
-	close(pt.stop)
-	p.setPublishedTrack(trackType, nil)
 	
-	if trackType == "video" {
-		ptRtx := p.getPublishedRTXPublished()
-		if ptRtx != nil {
-			close(ptRtx.stop)
-			p.setPublishedRTXPublished(nil)
-		}
-	}
+	// don't remove the track from the peer, just stop sending packets
+	//close(pt.stop)
+	//p.setPublishedTrack(trackType, nil)
+
 	p.mu.Unlock()
 
 	// remove subscriptions from all other peers subscribing to this track
-	sfu.mu.RLock()
-	for _, other := range sfu.peers {
-		if other.id == p.id {
-			continue
-		}
-		subKey := p.id + "_" + trackType
-		other.mu.Lock()
-		delete(other.subscriptions, subKey)
-		other.mu.Unlock()
-	}
-	sfu.mu.RUnlock()
+	// sfu.mu.RLock()
+	// for _, other := range sfu.peers {
+	// 	if other.id == p.id {
+	// 		continue
+	// 	}
+	// 	subKey := p.id + "_" + trackType
+	// 	other.mu.Lock()
+	// 	delete(other.subscriptions, subKey)
+	// 	other.mu.Unlock()
+	// }
+	// sfu.mu.RUnlock()
 
 	return nil
 }
@@ -336,9 +342,9 @@ func handleUnsubscribe(p *Peer, msg SignalMessage) error {
 func setupOnTrack(p *Peer) {
 	p.pc.OnTrack(func(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		var trackType string
-		if remoteTrack.Kind() == webrtc.RTPCodecTypeAudio {
+		if remoteTrack.Kind() == webrtc.RTPCodecTypeAudio && remoteTrack.Codec().MimeType == webrtc.MimeTypeOpus {
 			trackType = "audio"
-		} else {
+		} else if remoteTrack.Kind() == webrtc.RTPCodecTypeVideo && remoteTrack.Codec().MimeType == webrtc.MimeTypeH264 {
 			trackType = "video"
 
 			/**
@@ -354,6 +360,9 @@ func setupOnTrack(p *Peer) {
 				}
 			}()
 			*/
+		} else {
+			log.Printf("Client %s started publishing unknown track type %s", p.id, remoteTrack.Codec().MimeType)
+			return;
 		}
 
 		ssrc := webrtc.SSRC(remoteTrack.SSRC())
@@ -362,16 +371,10 @@ func setupOnTrack(p *Peer) {
 			ssrc: ssrc,
 			stop: make(chan struct{}),
 		}
-
-		if remoteTrack.Codec().MimeType == webrtc.MimeTypeRTX {
-			p.mu.Lock()
-			p.setPublishedRTXPublished(pt)
-			p.mu.Unlock()
-		} else {
-			p.mu.Lock()
-			p.setPublishedTrack(trackType, pt)
-			p.mu.Unlock()
-		}
+		
+		p.mu.Lock()
+		p.setPublishedTrack(trackType, pt)
+		p.mu.Unlock()
 
 		log.Printf("Client %s started publishing %s (SSRC: %d)", p.id, trackType, ssrc)
 
@@ -390,6 +393,11 @@ func setupOnTrack(p *Peer) {
 				if readErr != nil {
 					log.Printf("Track read error for %s/%s: %v", p.id, trackType, readErr)
 					return
+				}
+
+				if !p.isAudioPublished && trackType == "audio" || !p.isVideoPublished && trackType == "video" {
+					// if we are not publishing this track, skip forwarding it
+					continue;
 				}
 
 				// Preserve original SSRC so the client can demultiplex
@@ -431,10 +439,12 @@ func cleanupPeer(p *Peer) {
 	p.mu.Lock()
 	if p.audioPublished != nil {
 		close(p.audioPublished.stop)
+		p.isAudioPublished = false
 		p.audioPublished = nil
 	}
 	if p.videoPublished != nil {
 		close(p.videoPublished.stop)
+		p.isVideoPublished = false
 		p.videoPublished = nil
 	}
 	p.mu.Unlock()
