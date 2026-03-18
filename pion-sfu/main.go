@@ -378,6 +378,7 @@ func setupOnTrack(p *Peer) {
 
 		log.Printf("Client %s started publishing %s (SSRC: %d)", p.id, trackType, ssrc)
 
+		isLoggedOnce := false
 		// Forward RTP packets to all subscribed peers
 		go func() {
 			subKey := p.id + "_" + trackType
@@ -398,6 +399,11 @@ func setupOnTrack(p *Peer) {
 				if !p.isAudioPublished && trackType == "audio" || !p.isVideoPublished && trackType == "video" {
 					// if we are not publishing this track, skip forwarding it
 					continue;
+				}
+
+				if !isLoggedOnce {
+					log.Printf("Client %s started forwarding %s (SSRC: %d)", p.id, trackType, ssrc)
+					isLoggedOnce = true
 				}
 
 				// Preserve original SSRC so the client can demultiplex
