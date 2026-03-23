@@ -1,3 +1,5 @@
+import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
 import { Codec, SignalingDelegate, WebRtcClient } from "@spacebarchat/spacebar-webrtc-types";
 import { VoiceRoom } from "./VoiceRoom.js";
 import { PionWebRtcClient } from "./PionWebRtcClient.js";
@@ -5,34 +7,57 @@ import { CodecInfo, MediaInfo, SDPInfo } from "semantic-sdp";
 import { IpcClient } from "./IpcClient.js";
 
 export class PionSignalingDelegate implements SignalingDelegate {
-    private _ip: string;
+	private _ip: string;
 	private _port: number;
 	private _rooms: Map<string, VoiceRoom> = new Map();
+	private _sfuProcess?: ChildProcessWithoutNullStreams;
+	private _isStopping = false;
 	public ipc: IpcClient;
 
 	constructor() {
-		this.ipc = new IpcClient('sfu-ipc', this)
+		this.ipc = new IpcClient("sfu-ipc", this);
 	}
 
-    public async start(public_ip: string, portMin: number, portMax: number): Promise<void> {
+	public async start(public_ip: string, portMin: number, portMax: number): Promise<void> {
 		this._port = portMin;
 		this._ip = public_ip;
+		await this.startSfu();
 		await this.ipc.connect();
-    }
+	}
 
-    public join(
-		roomId: string,
-		userId: string,
-		ws: any,
-		type: "guild-voice" | "dm-voice" | "stream",
+	private async startSfu() {
+		if (!process.env.PION_SFU_BIN) {
+			console.warn(`PION_SFU_BIN environment variable not set, skipping integrated SFU startup - voice will not work if running at least an SFU instance at ${this._ip}:${this._port}!`);
+			return;
+		}
+		this._sfuProcess = spawn(process.env.PION_SFU_BIN, [ "-port", this._port.toString(), "-ip", this._ip ]);
+
+		this._sfuProcess!.stdout.on("data", (data) => {
+			console.log(`[Pion SFU] ${data}`);
+		});
+
+		this._sfuProcess!.stderr.on("data", (data) => {
+			console.error(`[Pion SFU] ${data}`);
+		});
+
+		const [ code ] = await once(this._sfuProcess!, "close");
+		console.log(`Pion SFU exited with code: ${code} - restarting...`);
+		if (!this._isStopping) await this.startSfu();
+	}
+
+	public join(
+			roomId: string,
+			userId: string,
+			ws: any,
+			type: "guild-voice" | "dm-voice" | "stream",
 	): Promise<WebRtcClient<any>> {
-        // if this is guild-voice or dm-voice, make sure user isn't already in a room of those types
+		// if this is guild-voice or dm-voice, make sure user isn't already in a room of those types
 		// user can be in many simultanous go live stream rooms though (can be in a voice channel and watching a stream for example, or watching multiple streams)
-		const rooms = type === "stream" ? [] : this.rooms
-			.values()
-			.filter((room) =>
-				room.type === "dm-voice" || room.type === "guild-voice",
-			);
+		const rooms = type==="stream" ? []:this.rooms
+				.values()
+				.filter((room) =>
+						room.type==="dm-voice" || room.type==="guild-voice",
+				);
 		let existingClient;
 
 		for (const room of rooms) {
@@ -59,45 +84,45 @@ export class PionSignalingDelegate implements SignalingDelegate {
 
 		room?.onClientJoin(client);
 
-		this.ipc.send({ type: "join", clientId: client.uniqueId! })
+		this.ipc.send({ type: "join", clientId: client.uniqueId! });
 
 		return Promise.resolve(client);
-    }
+	}
 
-    public async onOffer(
-		client: WebRtcClient<any>,
-		sdpOffer: string,
-		codecs: Codec[],
-	): Promise<{sdp: string, selectedVideoCodec: string}> {
-        const room = this._rooms.get(client.voiceRoomId);
+	public async onOffer(
+			client: WebRtcClient<any>,
+			sdpOffer: string,
+			codecs: Codec[],
+	): Promise<{ sdp: string, selectedVideoCodec: string }> {
+		const room = this._rooms.get(client.voiceRoomId);
 
 		if (!room) {
 			console.error(
-				"error, client sent an offer but has not authenticated",
+					"error, client sent an offer but has not authenticated",
 			);
 			Promise.reject();
 		}
 
-		const offer = sdpOffer.startsWith("v=0") ? SDPInfo.parse(sdpOffer) : SDPInfo.parse("m=audio\n" + sdpOffer);
+		const offer = sdpOffer.startsWith("v=0") ? SDPInfo.parse(sdpOffer):SDPInfo.parse("m=audio\n" + sdpOffer);
 
 		const rtpHeaders = new Map(offer.medias[0].extensions);
 
 		const getIdForHeader = (
-			rtpHeaders: Map<number, string>,
-			headerUri: string,
+				rtpHeaders: Map<number, string>,
+				headerUri: string,
 		) => {
-			for (const [key, value] of rtpHeaders) {
-				if (value == headerUri) return key;
+			for (const [ key, value ] of rtpHeaders) {
+				if (value==headerUri) return key;
 			}
 			return -1;
 		};
 
-		const isChromium = codecs.find((val) => val.name == "opus")?.payload_type === 111;
+		const isChromium = codecs.find((val) => val.name=="opus")?.payload_type===111;
 
 		const audioMedia = new MediaInfo("0", "audio");
 		const audioCodec = new CodecInfo(
-			"opus",
-			codecs.find((val) => val.name == "opus")?.payload_type ?? 111,
+				"opus",
+				codecs.find((val) => val.name=="opus")?.payload_type ?? 111,
 		);
 		audioCodec.addParam("minptime", "10");
 		audioCodec.addParam("usedtx", "1");
@@ -106,27 +131,27 @@ export class PionSignalingDelegate implements SignalingDelegate {
 		audioMedia.addCodec(audioCodec);
 
 		const audioLevelExtensionId = getIdForHeader(
-			rtpHeaders,
-			"urn:ietf:params:rtp-hdrext:ssrc-audio-level",
-		)
-
-		if(audioLevelExtensionId > -1) {
-			audioMedia.addExtension(
-				audioLevelExtensionId,
+				rtpHeaders,
 				"urn:ietf:params:rtp-hdrext:ssrc-audio-level",
+		);
+
+		if (audioLevelExtensionId > -1) {
+			audioMedia.addExtension(
+					audioLevelExtensionId,
+					"urn:ietf:params:rtp-hdrext:ssrc-audio-level",
 			);
 		}
 
 		if (isChromium) {
 			// if this is chromium, apply this header
 			const transportWideCcHeaderId = getIdForHeader(
-				rtpHeaders,
-				"http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
-			)
-			if(transportWideCcHeaderId > -1) {
-				audioMedia.addExtension(
-					transportWideCcHeaderId,
+					rtpHeaders,
 					"http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
+			);
+			if (transportWideCcHeaderId > -1) {
+				audioMedia.addExtension(
+						transportWideCcHeaderId,
+						"http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
 				);
 			}
 		}
@@ -134,77 +159,81 @@ export class PionSignalingDelegate implements SignalingDelegate {
 		const videoMedia = new MediaInfo("1", "video");
 
 		const videoCodec = new CodecInfo(
-			"H264",
-			codecs.find((val) => val.name == "H264")?.payload_type ?? 102,
+				"H264",
+				codecs.find((val) => val.name=="H264")?.payload_type ?? 102,
 		);
 		videoCodec.setRTX(
-			codecs.find((val) => val.name == "H264")?.rtx_payload_type ?? 103,
+				codecs.find((val) => val.name=="H264")?.rtx_payload_type ?? 103,
 		);
 		videoCodec.addParam("level-asymmetry-allowed", "1");
 		videoCodec.addParam("packetization-mode", "1");
 		videoCodec.addParam("profile-level-id", "42e01f");
 		videoCodec.addParam("x-google-max-bitrate", "2500");
 		videoMedia.addCodec(videoCodec);
-		
+
 		const absSendTimeHeaderId = getIdForHeader(
-			rtpHeaders,
-			"http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
-		)
-		if(absSendTimeHeaderId > -1) {
-			videoMedia.addExtension(
-				absSendTimeHeaderId,
+				rtpHeaders,
 				"http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+		);
+		if (absSendTimeHeaderId > -1) {
+			videoMedia.addExtension(
+					absSendTimeHeaderId,
+					"http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
 			);
 		}
-		const toffsetHeaderId = getIdForHeader(rtpHeaders, "urn:ietf:params:rtp-hdrext:toffset")
-		if(toffsetHeaderId > -1) {
+		const toffsetHeaderId = getIdForHeader(rtpHeaders, "urn:ietf:params:rtp-hdrext:toffset");
+		if (toffsetHeaderId > -1) {
 			videoMedia.addExtension(
-				toffsetHeaderId,
-				"urn:ietf:params:rtp-hdrext:toffset",
+					toffsetHeaderId,
+					"urn:ietf:params:rtp-hdrext:toffset",
 			);
 		}
 		const playoutDelayHeaderId = getIdForHeader(
-			rtpHeaders,
-			"http://www.webrtc.org/experiments/rtp-hdrext/playout-delay",
-		)
-		if(playoutDelayHeaderId > -1) {
-			videoMedia.addExtension(
-				playoutDelayHeaderId,
+				rtpHeaders,
 				"http://www.webrtc.org/experiments/rtp-hdrext/playout-delay",
+		);
+		if (playoutDelayHeaderId > -1) {
+			videoMedia.addExtension(
+					playoutDelayHeaderId,
+					"http://www.webrtc.org/experiments/rtp-hdrext/playout-delay",
 			);
 		}
 		const transportWideCcHeaderId = getIdForHeader(
 				rtpHeaders,
 				"http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
-			)
-			if(transportWideCcHeaderId > -1) {
-				videoMedia.addExtension(
+		);
+		if (transportWideCcHeaderId > -1) {
+			videoMedia.addExtension(
 					transportWideCcHeaderId,
 					"http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
-				);
-			}
+			);
+		}
 
 		if (isChromium) {
 			// if this is chromium, apply this header
-			const videoOrientationHeaderId = getIdForHeader(rtpHeaders, "urn:3gpp:video-orientation")
-			if(videoOrientationHeaderId > -1) {
+			const videoOrientationHeaderId = getIdForHeader(rtpHeaders, "urn:3gpp:video-orientation");
+			if (videoOrientationHeaderId > -1) {
 				videoMedia.addExtension(
-					videoOrientationHeaderId,
-					"urn:3gpp:video-orientation",
+						videoOrientationHeaderId,
+						"urn:3gpp:video-orientation",
 				);
 			}
 		}
 
-		offer.medias = [audioMedia, videoMedia];
-		
-		const finalOffer = offer.toString().replace(' NaN ', ' 3984 ').replace(':actpass', ':active')
+		offer.medias = [ audioMedia, videoMedia ];
 
-		console.log(finalOffer)
-		const res = await this.ipc.request({type: "offer", clientId: (client as PionWebRtcClient).uniqueId!, sdp: finalOffer})
+		const finalOffer = offer.toString().replace(" NaN ", " 3984 ").replace(":actpass", ":active");
 
-		if(!res.sdp) return Promise.reject();
+		console.log(finalOffer);
+		const res = await this.ipc.request({
+			type: "offer",
+			clientId: (client as PionWebRtcClient).uniqueId!,
+			sdp: finalOffer,
+		});
 
-		const answerSdp = SDPInfo.parse(res.sdp)
+		if (!res.sdp) return Promise.reject();
+
+		const answerSdp = SDPInfo.parse(res.sdp);
 
 		//console.log(res.sdp)
 
@@ -212,28 +241,28 @@ export class PionSignalingDelegate implements SignalingDelegate {
 		const fingerprint = answerSdp.dtls.getHash() + " " + answerSdp.dtls.getFingerprint();
 
 		const answer =
-			`m=audio ${this.port} ICE/SDP\n` +
-			`a=fingerprint:${fingerprint}\n` +
-			`c=IN IP4 ${this.ip}\n` +
-			`a=rtcp:${this.port}\n` +
-			`a=ice-ufrag:${answerSdp.ice.getUfrag()}\n` +
-			`a=ice-pwd:${answerSdp.ice.getPwd()}\n` +
-			`a=fingerprint:${fingerprint}\n` +
-			`a=candidate:1 1 ${candidate.getTransport()} ${candidate.getFoundation()} ${candidate.getAddress()} ${candidate.getPort()} typ host\n`;
+				`m=audio ${this.port} ICE/SDP\n` +
+				`a=fingerprint:${fingerprint}\n` +
+				`c=IN IP4 ${this.ip}\n` +
+				`a=rtcp:${this.port}\n` +
+				`a=ice-ufrag:${answerSdp.ice.getUfrag()}\n` +
+				`a=ice-pwd:${answerSdp.ice.getPwd()}\n` +
+				`a=fingerprint:${fingerprint}\n` +
+				`a=candidate:1 1 ${candidate.getTransport()} ${candidate.getFoundation()} ${candidate.getAddress()} ${candidate.getPort()} typ host\n`;
 
-		return Promise.resolve({sdp: answer, selectedVideoCodec: videoCodec.codec.toUpperCase()});
-    }
+		return Promise.resolve({ sdp: answer, selectedVideoCodec: videoCodec.codec.toUpperCase() });
+	}
 
-    public onClientClose = (client: WebRtcClient<any>) => {
+	public onClientClose = (client: WebRtcClient<any>) => {
 		this._rooms.get(client.voiceRoomId)?.onClientLeave(client);
-		this.ipc.send({ type: "leave", clientId: (client as PionWebRtcClient).uniqueId! })
-    }
+		this.ipc.send({ type: "leave", clientId: (client as PionWebRtcClient).uniqueId! });
+	};
 
-    public updateSDP(offer: string): void {
+	public updateSDP(offer: string): void {
 		throw new Error("Method not implemented.");
 	}
 
-    public getClientsForRtcServer(rtcServerId: string): Set<WebRtcClient<any>> {
+	public getClientsForRtcServer(rtcServerId: string): Set<WebRtcClient<any>> {
 		if (!this._rooms.has(rtcServerId)) {
 			return new Set();
 		}
@@ -252,15 +281,16 @@ export class PionSignalingDelegate implements SignalingDelegate {
 	}
 
 	public createRoom(
-		rtcServerId: string,
-		type: "guild-voice" | "dm-voice" | "stream",
+			rtcServerId: string,
+			type: "guild-voice" | "dm-voice" | "stream",
 	): void {
 		this._rooms.set(rtcServerId, new VoiceRoom(rtcServerId, type, this));
 	}
 
-    get ip(): string {
+	get ip(): string {
 		return this._ip;
 	}
+
 	get port(): number {
 		return this._port;
 	}
@@ -270,10 +300,12 @@ export class PionSignalingDelegate implements SignalingDelegate {
 	}
 
 	public async stop(): Promise<void> {
+		this._isStopping = true;
 		for (const room of this._rooms.values()) {
 			await room.stop();
 		}
 		await this.ipc.close();
+		this._sfuProcess?.kill();
 		return Promise.resolve();
 	}
 }
