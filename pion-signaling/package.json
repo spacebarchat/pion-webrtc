@@ -20,8 +20,8 @@
     },
     "devDependencies": {
         "@spacebarchat/spacebar-webrtc-types": "^1.0.1",
-        "@types/node": "^20.17.1",
-        "typescript": "^5.6.3"
+        "@types/node": "^25.9.1",
+        "typescript": "^6.0.3"
     },
     "peerDependencies": {
         "@spacebarchat/spacebar-webrtc-types": "^1.0.1"
