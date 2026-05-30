@@ -16,7 +16,7 @@ pkgs.buildGo126Module (finalAttrs: {
 
   src = ./pion-sfu;
 
-  vendorHash = "sha256-tthWbVeyM4lw9i1XQO++8yUO9+oNBP44bbXTQTSC/Uk=";
+  vendorHash = "sha256-pYOA8wC95hf1YpIIhd7FRztDrr5olmQhPtKLqWbeWhU=";
 
   meta = {
     description = "Spacebar Go WebRTC server";
