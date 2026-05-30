@@ -348,17 +348,17 @@ func setupOnTrack(p *Peer) {
 			trackType = "video"
 
 			/**
-			// send a PLI on an interval so that the publisher is pushing a keyframe every rtcpPLIInterval
-			// do we need this? takes a while to see the video otherwise
-			go func() {
-				ticker := time.NewTicker(time.Second * 3)
-				for range ticker.C {
-					errSend := p.pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(remoteTrack.SSRC())}})
-					if errSend != nil {
-						fmt.Println(errSend)
-					}
-				}
-			}()
+			  // send a PLI on an interval so that the publisher is pushing a keyframe every rtcpPLIInterval
+			  // do we need this? takes a while to see the video otherwise
+			  go func() {
+			  	ticker := time.NewTicker(time.Second * 3)
+			  	for range ticker.C {
+			  		errSend := p.pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(remoteTrack.SSRC())}})
+			  		if errSend != nil {
+			  			fmt.Println(errSend)
+			  		}
+			  	}
+			  }()
 			*/
 		} else {
 			log.Printf("Client %s started publishing unknown track type %s", p.id, remoteTrack.Codec().MimeType)

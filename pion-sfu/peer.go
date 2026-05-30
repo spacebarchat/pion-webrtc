@@ -41,7 +41,7 @@ func (p *Peer) setPublishedTrack(trackType string, pt *PublishedTrack) {
 	}
 }
 
-//wraps a local static RTP track fed by an incoming remote
+// wraps a local static RTP track fed by an incoming remote
 // track. We keep the RTP packets flowing in a goroutine
 type PublishedTrack struct {
 	track *webrtc.TrackLocalStaticRTP

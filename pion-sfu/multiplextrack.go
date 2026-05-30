@@ -70,10 +70,10 @@ func (t *MultiplexTrack) Unbind(ctx webrtc.TrackLocalContext) error {
 	return nil
 }
 
-func (t *MultiplexTrack) ID() string { return t.id }
-func (t *MultiplexTrack) StreamID() string { return t.streamID }
+func (t *MultiplexTrack) ID() string                { return t.id }
+func (t *MultiplexTrack) StreamID() string          { return t.streamID }
 func (t *MultiplexTrack) Kind() webrtc.RTPCodecType { return t.kind }
-func (t *MultiplexTrack) RID() string { return "" }
+func (t *MultiplexTrack) RID() string               { return "" }
 
 func (t *MultiplexTrack) WriteRTP(p *rtp.Packet) error {
 	t.mu.RLock()
@@ -82,7 +82,7 @@ func (t *MultiplexTrack) WriteRTP(p *rtp.Packet) error {
 	outboundPacket := *p
 
 	// write without rewriting the SSRC, but DO rewrite the Payload Type!
-	// keeping the sender SSRC simplifies our signaling work. However, payload type 
+	// keeping the sender SSRC simplifies our signaling work. However, payload type
 	// must be kept from the receiver client offer since each browser uses a different one
 	for _, b := range t.bindings {
 		outboundPacket.Header.PayloadType = b.payloadType
