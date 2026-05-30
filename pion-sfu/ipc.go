@@ -59,9 +59,9 @@ func (ipcConn *IpcConnection) handleConnection() {
 		// 4-byte length header (Length-prefixed framing)
 		if _, err := io.ReadFull(ipcConn.conn, headerBuf); err != nil {
 			if err == io.EOF {
-				log.Println("Client disconnected")
+				log.Println("(IPC) Client disconnected")
 			} else {
-				log.Printf("Socket read error: %v", err)
+				log.Printf("(IPC) Socket read error: %v", err)
 			}
 			return
 		}
@@ -70,21 +70,21 @@ func (ipcConn *IpcConnection) handleConnection() {
 
 		// prevent possible DOS when node sends massive length header
 		if msgLen > 10*1024*1024 { // 10MB limit
-			log.Println("Message too large, closing connection")
+			log.Println("(IPC) Message too large, closing connection")
 			return
 		}
 
 		// read the exact payload based on length
 		payloadBuf := make([]byte, msgLen)
 		if _, err := io.ReadFull(ipcConn.conn, payloadBuf); err != nil {
-			log.Printf("Failed to read full payload: %v", err)
+			log.Printf("(IPC) Failed to read full payload: %v", err)
 			return
 		}
 
 		// parse and handle message
 		var msg IpcMessage
 		if err := json.Unmarshal(payloadBuf, &msg); err != nil {
-			log.Printf("Invalid JSON received: %v", err)
+			log.Printf("(IPC) Invalid JSON received: %v", err)
 			continue
 		}
 
@@ -105,11 +105,11 @@ func (ipcConn *IpcConnection) processMessage(ipcMsg IpcMessage) {
 	clientID := msg.ClientID
 
 	if clientID == "" {
-		log.Printf("Message missing clientId, ignoring")
+		log.Printf("(IPC) Message missing clientId, ignoring")
 		return
 	}
 
-	log.Printf("id=%s client=%s type=%s", requestID, clientID, msg.Type)
+	log.Printf("(IPC) Received message from gateway: id=%s client=%s type=%s", requestID, clientID, msg.Type)
 
 	var handleErr error
 
@@ -135,7 +135,7 @@ func (ipcConn *IpcConnection) processMessage(ipcMsg IpcMessage) {
 		// all other messages require an existing peer
 		p := sfu.GetPeer(clientID)
 		if p == nil {
-			handleErr = fmt.Errorf("client %s not found (send 'join' first)", clientID)
+			handleErr = fmt.Errorf("(IPC) client %s not found (send 'join' first)", clientID)
 		} else {
 			switch msg.Type {
 			case "offer":
@@ -149,13 +149,13 @@ func (ipcConn *IpcConnection) processMessage(ipcMsg IpcMessage) {
 			case "unsubscribe":
 				handleErr = handleUnsubscribe(p, msg)
 			default:
-				handleErr = fmt.Errorf("unknown message type: %s", msg.Type)
+				handleErr = fmt.Errorf("(IPC) unknown message type: %s", msg.Type)
 			}
 		}
 	}
 
 	if handleErr != nil {
-		log.Printf("client=%s error handling %s: %v", clientID, msg.Type, handleErr)
+		log.Printf("(IPC) client=%s error handling %s: %v", clientID, msg.Type, handleErr)
 		ipcConn.sendReply(requestID, msg, handleErr.Error())
 	}
 }
