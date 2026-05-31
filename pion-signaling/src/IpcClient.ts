@@ -33,7 +33,6 @@ export class IpcClient {
   private sfu: PionSignalingDelegate;
 
   constructor(pipeName: string, sfu: PionSignalingDelegate) {
-    
     this.sfu = sfu;
 
     // cross-platform check
@@ -44,8 +43,8 @@ export class IpcClient {
     }
   }
 
-  // todo: reconnect logic 
-  
+  // todo: reconnect logic
+
   public connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       console.log(`connecting to IPC at ${this.socketPath}...`);
@@ -63,9 +62,21 @@ export class IpcClient {
         reject(err);
       });
 
-      this.socket.on('close', () => {
+      this.socket.on('close', async (hadError) => {
         console.log('IPC connection closed');
         this.rejectAllPending(new Error('IPC connection closed'));
+
+		while(!hadError) {
+			await new Promise((res) => setTimeout(res, 1000));
+			try {
+				// clear event handlers so the old socket can get collected
+				this.socket?.eventNames().forEach(name => this.socket?.removeAllListeners(name));
+				await this.connect();
+				return;
+			} catch (e) {
+				console.error("[IPC] Unable to connect to socket:", e);
+			}
+		}
       });
     });
   }
@@ -93,16 +104,16 @@ export class IpcClient {
       // check if it's a response to a request we made
       if (message.type === 'response' && message.id) {
         const pending = this.pendingRequests.get(message.id);
-        
+
         if (pending) {
           clearTimeout(pending.timeout);
-          
+
           if (message.error) {
             pending.reject(new Error(message.error));
           } else {
             pending.resolve(message.payload);
           }
-          
+
           this.pendingRequests.delete(message.id);
         }
       } else {
