@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"runtime"
@@ -14,15 +15,16 @@ import (
 	"github.com/pion/interceptor"
 	"github.com/pion/logging"
 	"github.com/pion/rtcp"
+	"github.com/pion/transport/v4/stdnet"
 	"github.com/pion/webrtc/v4"
 )
 
 const (
-	pipeName   = "sfu-ipc"
+	pipeName = "sfu-ipc"
 )
 
 var (
-	sfu      = NewSfu()
+	sfu       = NewSfu()
 	webrtcAPI *webrtc.API
 
 	// IPC
@@ -47,9 +49,9 @@ func createMediaEngine() (*webrtc.MediaEngine, error) {
 
 	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:    webrtc.MimeTypeH264,
-			ClockRate:   90000,
-			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f;x-google-max-bitrate=2500",
+			MimeType:     webrtc.MimeTypeH264,
+			ClockRate:    90000,
+			SDPFmtpLine:  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f;x-google-max-bitrate=2500",
 			RTCPFeedback: nil,
 		},
 		PayloadType: 103,
@@ -57,19 +59,17 @@ func createMediaEngine() (*webrtc.MediaEngine, error) {
 		return nil, err
 	}
 
-	
 	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:    webrtc.MimeTypeRTX,
-			ClockRate:   90000,
-			SDPFmtpLine: "apt=103",
+			MimeType:     webrtc.MimeTypeRTX,
+			ClockRate:    90000,
+			SDPFmtpLine:  "apt=103",
 			RTCPFeedback: nil,
 		},
 		PayloadType: 104,
 	}, webrtc.RTPCodecTypeVideo); err != nil {
 		return nil, err
 	}
-	
 
 	return m, nil
 }
@@ -229,7 +229,7 @@ func handleStopPublish(p *Peer, msg SignalMessage) error {
 		p.mu.Unlock()
 		return fmt.Errorf("not publishing %s", trackType)
 	}
-	
+
 	// don't remove the track from the peer, just stop sending packets
 	//close(pt.stop)
 	//p.setPublishedTrack(trackType, nil)
@@ -298,7 +298,7 @@ func handleSubscribe(p *Peer, msg SignalMessage, requestID string) error {
 	// force a keyframe
 	if err := publisher.pc.WriteRTCP([]rtcp.Packet{
 		&rtcp.PictureLossIndication{
-			SenderSSRC: uint32(pt.ssrc), 
+			SenderSSRC: uint32(pt.ssrc),
 			MediaSSRC:  uint32(pt.ssrc),
 		},
 	}); err != nil {
@@ -362,7 +362,7 @@ func setupOnTrack(p *Peer) {
 			*/
 		} else {
 			log.Printf("Client %s started publishing unknown track type %s", p.id, remoteTrack.Codec().MimeType)
-			return;
+			return
 		}
 
 		ssrc := webrtc.SSRC(remoteTrack.SSRC())
@@ -371,7 +371,7 @@ func setupOnTrack(p *Peer) {
 			ssrc: ssrc,
 			stop: make(chan struct{}),
 		}
-		
+
 		p.mu.Lock()
 		p.setPublishedTrack(trackType, pt)
 		p.mu.Unlock()
@@ -397,7 +397,7 @@ func setupOnTrack(p *Peer) {
 
 				if !p.isAudioPublished && trackType == "audio" || !p.isVideoPublished && trackType == "video" {
 					// if we are not publishing this track, skip forwarding it
-					continue;
+					continue
 				}
 
 				// Preserve original SSRC so the client can demultiplex
@@ -475,10 +475,10 @@ func main() {
 	// Parse the flags from the command line
 	flag.Parse()
 
-	if(*webrtcPublicIp == "[IP_ADDRESS]") {
+	if *webrtcPublicIp == "[IP_ADDRESS]" {
 		log.Fatalf("WebRTC public IP is required. Use -ip <ip_address> -port <port>")
 	}
-	
+
 	// media engine with only Opus + H264
 	mediaEngine, err := createMediaEngine()
 	if err != nil {
@@ -495,9 +495,9 @@ func main() {
 	// this is so that the sdp offer always sends our public IP
 	// in case our SFU server is behind NAT
 	settingEngine.SetICEAddressRewriteRules(webrtc.ICEAddressRewriteRule{
-		External:      []string{*webrtcPublicIp},
+		External:        []string{*webrtcPublicIp},
 		AsCandidateType: webrtc.ICECandidateTypeHost,
-		Mode:          webrtc.ICEAddressRewriteReplace,
+		Mode:            webrtc.ICEAddressRewriteReplace,
 	})
 
 	// debug logging, remove when done
@@ -505,11 +505,24 @@ func main() {
 	logFactory.DefaultLogLevel = logging.LogLevelDebug
 	settingEngine.LoggerFactory = logFactory
 
-	// all of our traffic will be coming from a single port, and multiplexed
-	mux, err := ice.NewMultiUDPMuxFromPort(*webrtcPort)
+	// Listen on 0.0.0.0 (all interfaces) to avoid binding to each local IP individually.
+	// NewMultiUDPMuxFromPort binds to every (interface, IP) pair separately, which fails
+	// when the same IP appears on multiple interfaces (Docker bridge networks for exemple).
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: *webrtcPort})
 	if err != nil {
-		log.Fatalf("NewMultiUDPMuxFromPort: %v", err)
+		log.Fatalf("ListenUDP: %v", err)
 	}
+
+	netTransport, err := stdnet.NewNet()
+	if err != nil {
+		log.Fatalf("stdnet.NewNet: %v", err)
+	}
+
+	mux := ice.NewUDPMuxDefault(ice.UDPMuxParams{
+		UDPConn: conn,
+		Net:     netTransport,
+		Logger:  logFactory.NewLogger("ice"),
+	})
 	settingEngine.SetICEUDPMux(mux)
 	log.Printf("WebRTC Public IP: %s", *webrtcPublicIp)
 	log.Printf("WebRTC UDP port: %d", *webrtcPort)
@@ -550,7 +563,7 @@ func main() {
 		webrtc.WithSettingEngine(settingEngine),
 		webrtc.WithInterceptorRegistry(interceptorRegistry),
 	)
-	
+
 	ipcConn = &IpcConnection{conn: nil}
 
 	listener, err := getListener(pipeName)
@@ -593,7 +606,7 @@ func main() {
 
 		go func() {
 			ipcConn.handleConnection()
-			
+
 			// when the connection finishes (Node disconnects/crashes),
 			// set the connection to nil so a new connection can be accepted.
 			ipcConn.mu.Lock()
