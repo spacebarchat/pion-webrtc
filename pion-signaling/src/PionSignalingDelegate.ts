@@ -254,7 +254,10 @@ export class PionSignalingDelegate implements SignalingDelegate {
 				`a=ice-ufrag:${answerSdp.ice.getUfrag()}\n` +
 				`a=ice-pwd:${answerSdp.ice.getPwd()}\n` +
 				`a=fingerprint:${fingerprint}\n` +
-				`a=candidate:1 1 ${candidate.getTransport()} ${candidate.getFoundation()} ${candidate.getAddress()} ${candidate.getPort()} typ host\n`;
+				// https://datatracker.ietf.org/doc/html/rfc5245#section-15.1
+				// is component ID a valid property? was previoiusly hardcoded as 1
+				// do we even want to send a priority?
+				`a=candidate:${candidate.getFoundation()} ${candidate.getComponentId()} ${candidate.getTransport()} ${candidate.getPriority()} ${candidate.getAddress()} ${candidate.getPort()} typ host\n`;
 
 		return Promise.resolve({ sdp: answer, selectedVideoCodec: videoCodec.codec.toUpperCase() });
 	}
