@@ -256,7 +256,7 @@ export class PionSignalingDelegate implements SignalingDelegate {
 				`a=fingerprint:${fingerprint}\n` +
 				// https://datatracker.ietf.org/doc/html/rfc5245#section-15.1
 				// is component ID a valid property? was previoiusly hardcoded as 1
-				// do we even want to send a priority?
+				// do we even want to send a priority? prev hardcoded as 1
 				`a=candidate:${candidate.getFoundation()} ${candidate.getComponentId()} ${candidate.getTransport()} ${candidate.getPriority()} ${candidate.getAddress()} ${candidate.getPort()} typ host\n`;
 
 		return Promise.resolve({ sdp: answer, selectedVideoCodec: videoCodec.codec.toUpperCase() });
