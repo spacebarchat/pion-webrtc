@@ -7,7 +7,8 @@
     "type": "module",
     "files": [
         "dist",
-        "src"
+        "src",
+        "!dist/.tsbuildinfo"
     ],
     "publishConfig": {
         "access": "public"
